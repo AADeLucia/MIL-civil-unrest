@@ -29,5 +29,6 @@ Only the scripts, code, and small data files are stored on GitHub.
 * `data`:
   * `tweets_en`: Tweet files aggregated by date and country of origin. Only English tweets are included, as identified by the language metadata tag. Country of origin identified by tweet location metadata. Files are in compressed JSONlines form and can be read with [`jsonlines`](https://jsonlines.readthedocs.io/en/latest/) or [`littlebird`](https://github.com/AADeLucia/littlebird) packages.
   * `2014-01-01-2020-01-01_acled_reduced_all.csv`: Civil unrest labels for the Twitter data. Provided by [Armed Conflict Location & Event Data Project (ACLED)](https://acleddata.com/data-export-tool/)
-* `results`: Models and prediction files
-  
+* `notebooks`: Jupyter notebooks for result visualization and analyses
+* 
+* `models`: Models and prediction files

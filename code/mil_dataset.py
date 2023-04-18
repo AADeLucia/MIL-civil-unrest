@@ -11,6 +11,7 @@ import os
 import sys
 import re
 import pathlib
+import pandas as pd
 import random
 import jsonlines as jl
 from iso3166 import countries as country_codes
@@ -32,14 +33,14 @@ logging.basicConfig(
 class MILTwitterDataset(tnt.dataset.ListDataset):
     def __init__(self,
                  data_files,
-                 positive_files,
+                 positive_bag_ids,
                  tokenizer,
                  samples_per_file=10,
                  shuffle_samples=False,
                  random_seed=None
                  ):
         super().__init__(data_files, self._load_function)
-        self.positive_files = positive_files
+        self.positive_bag_ids = positive_bag_ids
         self.shuffle_samples = shuffle_samples
         self.samples_per_file = samples_per_file
         self.random_seed = random_seed
@@ -84,7 +85,7 @@ class MILTwitterDataset(tnt.dataset.ListDataset):
     def _label_sample(self, filename):
         # Get filename and label sample
         filename = self._rename_file(filename)
-        return int(filename in self.positive_files)
+        return int(filename in self.positive_bag_ids)
 
     def collate_function(self, batch):
         """Collate output from _load_function into a batch"""
@@ -108,8 +109,7 @@ class MILTwitterDataset(tnt.dataset.ListDataset):
         tweet_text = []
         for text in collated["instance_text"]:
             tweet_text.extend(text)
-        token_inputs = self.tokenizer.batch_encode_plus(tweet_text, return_tensors="pt",
-                                                   truncation="longest_first", padding=True)
+        token_inputs = self.tokenizer.batch_encode_plus(tweet_text, return_tensors="pt", truncation="longest_first", padding=True)
         collated["input_ids"] = token_inputs["input_ids"]
         collated["attention_mask"] = token_inputs["attention_mask"]
         return collated
@@ -141,3 +141,16 @@ class MILTwitterDataset(tnt.dataset.ListDataset):
         pattern = re.compile(pattern)
         return [str(i) for i in path.iterdir() if pattern.search(str(i))]
 
+
+def get_acled_labels(acled_file=f"{os.environ['MINERVA_HOME']}/data/2014-01-01-2020-01-01_acled_reduced_all.csv"):
+    # Set up dataset
+    # Ground truth labels from ACLED
+    acled_df = pd.read_csv(
+        acled_file,
+        keep_default_na=False,  # Preserve "NA" country code
+        parse_dates=[4],  # Event dates
+    )
+    positive_dates = set(acled_df.apply(
+        lambda x: f"{x.event_date.strftime('%Y_%m_%d')}_{x.iso3}",
+        axis=1))
+    return positive_dates

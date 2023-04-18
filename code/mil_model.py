@@ -13,6 +13,8 @@ from transformers.file_utils import ModelOutput
 from dataclasses import dataclass, field
 import torch
 import logging
+import sys
+import os
 
 # Setup logging
 logger = logging.getLogger()
@@ -52,14 +54,18 @@ class InstanceModel(torch.nn.Module):
         return self.tokenizer
 
 
-class BagModel(torch.nn.Module):
-    """Instance scores -> score for bag"""
+class TopKBagModel(torch.nn.Module):
+    """
+    Instance scores -> score for bag
+
+    This bag model uses the top instance scores to calculate the final
+    bag prediction
+    """
     def __init__(self,
                  key_instance_ratio=1.0,
                  positive_class_weight=1.0):
         super().__init__()
         self.key_instance_ratio = key_instance_ratio
-        self.positive_class_weight = positive_class_weight  # NOT USED
         self.loss = torch.nn.BCELoss()
 
     def forward(self, X, mask):
@@ -85,8 +91,9 @@ class BagModel(torch.nn.Module):
         ).type(dtype=torch.long)
         return k
 
-    def calculate_loss(self, bag_probs, y):
-        return self.loss(bag_probs, y)
+    @staticmethod
+    def calculate_loss(bag_probs, y):
+        return torch.nn.functional.binary_cross_entropy(bag_probs, y)
 
 
 @dataclass
@@ -102,14 +109,14 @@ class MILClassifierOutput(ModelOutput):
 
 class MILModel(torch.nn.Module):
     def __init__(self,
-                 instance_model=InstanceModel(),
-                 bag_model=BagModel(),
+                 instance_model_path="vinai/bertweet-base",
+                 key_instance_ratio=1.0,
                  instance_level_loss=0.0,
                  finetune_instance_model=True
                  ):
         super().__init__()
-        self.bag_model = bag_model
-        self.instance_model = instance_model
+        self.bag_model = TopKBagModel(key_instance_ratio)
+        self.instance_model = InstanceModel(instance_model_path)
         self.instance_level_loss = instance_level_loss
         self.finetune_instance_model = finetune_instance_model
 
@@ -119,10 +126,11 @@ class MILModel(torch.nn.Module):
             for name, param in self.instance_model.model.roberta.named_parameters():
                 param.requires_grad = False
 
-    def forward(self, input_ids, attention_mask, mask, labels, instance_scores, **kwargs):
+    def forward(self, input_ids, attention_mask, mask, labels, instance_scores, instance_ids, **kwargs):
         """
         Bags are flattened
         Accepts **kwargs to handle HuggingFace trainer
+        Only arguments specified in signature are split by the dataloader
         """
         # Get instance probs
         instance_probs = self.instance_model(input_ids, attention_mask, reshape=instance_scores.shape)
@@ -130,7 +138,7 @@ class MILModel(torch.nn.Module):
         bag_probs, key_instance_idx = self.bag_model(instance_probs, mask)
         # Map the key instance indices to the actual instance IDs for later analysis
         key_instances = []
-        for b_idx, b_id in zip(key_instance_idx, kwargs["instance_ids"]):
+        for b_idx, b_id in zip(key_instance_idx, instance_ids):
             key_instances.append([b_id[i] for i in b_idx])
         # Calculate loss
         loss = None
@@ -176,6 +184,13 @@ class MILModel(torch.nn.Module):
             instance_loss = (instance_loss * mask).sum() / num_key_instances.sum()
             loss = loss + (instance_loss * self.instance_level_loss)
         return loss
+
+    @classmethod
+    def from_pretrained(cls, model_path):
+        """Load a pretrained model. Function models HuggingFace from_pretrained"""
+        m = MILModel()
+        m.load_state_dict(model_path)
+        return m
 
 
 def compute_metrics(eval_prediction):
