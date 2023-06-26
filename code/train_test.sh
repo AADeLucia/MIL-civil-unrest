@@ -5,6 +5,8 @@
 export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=1
 export WANDB_PROJECT="Minerva"
+export WANDB_RUN_GROUP="Test"
+
 # torchrun isn't working
 # python -m torch.distributed.launch
 # --sharded_ddp zero_dp_3 works for training but not inference
@@ -14,8 +16,7 @@ LOG_STEP=100
 RATIOS=( 0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 )
 for k in "${RATIOS[@]}"
 do
-  OUTPUT_DIR="${MINERVA_HOME}/models/finetune_shuffle/ratio_${k}"
-  OUTPUT_DIR="${MINERVA_HOME}/models/test"
+  OUTPUT_DIR="${MINERVA_HOME}/models/test/ratio_${k}"
   LOG_DIR="${OUTPUT_DIR}/logs"
   mkdir -p "${LOG_DIR}"
 
@@ -25,7 +26,7 @@ do
     --dataset_dir "${MINERVA_HOME}/data/premade_mil_test" \
     --sample_instances False \
     --finetune_instance_model False \
-    --run_name "test-finetune-${k}" \
+    --run_name "test-${k}" \
     --key_instance_ratio "${k}" \
     --output_dir "${OUTPUT_DIR}" \
     --logging_dir "${LOG_DIR}" \

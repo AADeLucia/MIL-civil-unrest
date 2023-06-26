@@ -31,7 +31,13 @@ logging.basicConfig(
 # Main
 ##################
 @dataclass
-class ExperimentArguments:
+class MILTrainingArguments(TrainingArguments):
+    """
+    Extend the HuggingFace Trainer to accept experiment-specific
+    arguments
+
+    Example: https://github.com/huggingface/transformers/blob/v4.20.1/src/transformers/training_args_seq2seq.py#L28
+    """
     dataset_dir: str = field(
         default=f"{os.environ['MINERVA_HOME']}/data/premade_mil",
     )
@@ -59,13 +65,14 @@ class ExperimentArguments:
 
 
 def parse_args():
-    parser = HfArgumentParser((TrainingArguments, ExperimentArguments))
-    return parser.parse_args_into_dataclasses()
+    parser = HfArgumentParser(MILTrainingArguments)
+    return parser.parse_args_into_dataclasses()[0]  # Hack because returns tuple
 
 
 def main():
     # Load commandline arguments
-    train_args, exp_args = parse_args()
+    train_args = parse_args()
+
     # Set rank in script instead of program arguments
     # Set variable to -1 if not using distributed training
     train_args.local_rank = int(os.environ.get('LOCAL_RANK', -1))
@@ -87,31 +94,30 @@ def main():
 
     # Set up model
     model = MILModel(
-        instance_model_path=exp_args.instance_model,
-        key_instance_ratio=exp_args.key_instance_ratio,
-        finetune_instance_model=exp_args.finetune_instance_model
+        instance_model_path=train_args.instance_model,
+        key_instance_ratio=train_args.key_instance_ratio,
+        finetune_instance_model=train_args.finetune_instance_model
     )
-    tokenizer = AutoTokenizer.from_pretrained(exp_args.instance_model)
+    tokenizer = AutoTokenizer.from_pretrained(train_args.instance_model)
 
     # Set up dataset
     train_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/train.jsonl",
+        f"{train_args.dataset_dir}/train.jsonl",
         tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
-        sample_instances=exp_args.sample_instances,
+        samples_per_bag=train_args.num_tweets_per_day,
+        sample_instances=train_args.sample_instances,
         random_seed=train_args.seed
     )
-
     eval_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/val.jsonl",
+        f"{train_args.dataset_dir}/val.jsonl",
         tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
+        samples_per_bag=train_args.num_tweets_per_day,
         random_seed=train_args.seed
     )
     test_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/test.jsonl",
+        f"{train_args.dataset_dir}/test.jsonl",
         tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
+        samples_per_bag=train_args.num_tweets_per_day,
         random_seed=train_args.seed
     )
 
