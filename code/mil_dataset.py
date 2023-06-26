@@ -30,18 +30,136 @@ logging.basicConfig(
 )
 
 
-class MILTwitterDataset(tnt.dataset.ListDataset):
+class MILTwitterDataset(torch.utils.data.Dataset):
+    """
+    https://pytorch.org/docs/stable/_modules/torch/utils/data/dataset.html#Dataset
+    """
+    def __init__(self,
+                 filepath,
+                 tokenizer,
+                 samples_per_bag=10,
+                 sample_instances=False,
+                 random_seed=None
+                 ):
+        super().__init__()
+        # Load data
+        with jl.open(filepath) as reader:
+            self.data = [i for i in reader.iter()]
+        self.sample_instances = sample_instances
+        self.samples_per_bag = samples_per_bag
+        self.sampler = random.Random(random_seed)
+        self.tokenizer = tokenizer
+
+    def __getitem__(self, index):
+        # Retrieve bag at index
+        # Of the format
+        # {"bag_id":, "filename":, "label":, "instances":, "num_instances":,}
+        item = self.data[index]
+        bag = item
+        # Limit number of instances to self.samples_per_bag
+        # Only need to sample instances if there are more than self.samples_per_bag
+        # otherwise, use the first X instances
+        if bag["num_instances"] > self.samples_per_bag:
+            if self.sample_instances:
+                bag["instances"] = self.sampler.choices(bag["instances"], k=self.samples_per_bag)
+            else:
+                bag["instances"] = bag["instances"][:self.samples_per_bag]
+        return bag
+
+    def __len__(self):
+        return len(self.data)
+
+    def collate_function(self, batch):
+        """
+        Collate output from __get_item__ into a batch
+
+        Add in an instance mask and the tokenizer-encoded inputs. Also pad so all tensors are same size.
+        """
+        collated = {
+            "instance_scores": [],
+            "bag_mask": [],
+            "instance_text": [],
+            "instance_ids": []
+        }
+        max_instances = max([b['num_instances'] for b in batch])
+        for i, temp in enumerate(batch):
+            for key in temp.keys():
+                if key == "instances":
+                    continue
+                val = temp[key]
+                if key == "label":
+                    key = "labels"  # Change to plural for clarity
+                    val = torch.tensor(val, dtype=torch.float)
+                if key in collated:
+                    collated[key].append(val)
+                else:
+                    collated[key] = [val]
+
+            # Handle padding
+            mask = torch.zeros((1, max_instances))
+            scores = torch.ones((1, max_instances)) * -1
+            text = [self.tokenizer.pad_token] * max_instances
+            ids = []
+
+            for j, t in enumerate(temp["instances"]):
+                scores[0][j] = t["civil_unrest_score"]
+                text[j] = t["tweet_text"]
+                mask[0][j] = 1
+                ids.append(t["id_str"])
+                #
+                # for key in t.keys():
+                #     if key in ["civil_unrest_score", "tweet_text"]:
+                #         continue
+                #     val = t[key]
+                #     if key == "id_str":
+                #         key = "instance_ids"
+                #     if key in collated:
+                #         collated[key].append(val)
+                #     else:
+                #         collated[key] = [val]
+            collated["instance_scores"].append(scores)
+            collated["bag_mask"].append(mask)
+            collated["instance_text"].append(text)
+            collated["instance_ids"].append(ids)
+
+        # Stack tensors here
+        collated["bag_mask"] = torch.stack(collated["bag_mask"], dim=0)
+        collated["instance_scores"] = torch.stack(collated["instance_scores"], dim=0)
+        collated["labels"] = torch.stack(collated["labels"], dim=0)
+        # Pass tokenized text to model
+        # DataParallel cannot split lists across GPUs, only tensors
+        tweet_text = []
+        for text in collated["instance_text"]:
+            tweet_text.extend(text)
+        token_inputs = self.tokenizer.batch_encode_plus(
+            tweet_text,
+            return_tensors="pt",
+            truncation="longest_first",
+            padding=True
+        )
+        collated["input_ids"] = token_inputs["input_ids"]
+        collated["attention_mask"] = token_inputs["attention_mask"]
+        return collated
+
+
+class MILTwitterDatasetLazy(tnt.dataset.ListDataset):
+    """
+    'Lazy' version of MILTwitterDataset which loads examples from each file for
+    each iteration.
+
+    A lot of duplicate code from create_dataset.py
+    """
     def __init__(self,
                  data_files,
                  positive_bag_ids,
                  tokenizer,
                  samples_per_file=10,
-                 shuffle_samples=False,
+                 sample_instances=False,
                  random_seed=None
                  ):
         super().__init__(data_files, self._load_function)
         self.positive_bag_ids = positive_bag_ids
-        self.shuffle_samples = shuffle_samples
+        self.sample_instances = sample_instances
         self.samples_per_file = samples_per_file
         self.random_seed = random_seed
         self.tweet_processor = TweetTokenizer(include_retweeted_and_quoted_content=True)  # Use to get tweet text
@@ -53,7 +171,7 @@ class MILTwitterDataset(tnt.dataset.ListDataset):
         tweet_text = ["<pad>" for _ in range(self.samples_per_file)]
         tweet_scores = [-1 for _ in range(self.samples_per_file)]
         mask = [0 for _ in range(self.samples_per_file)]
-        if self.shuffle_samples:
+        if self.sample_instances:
             # Use the following command to sample from files with reproducibility
             # Issue: samples the SAME tweets from a file for each iteration
             # f"zcat {filename} | ./seeded-shuf -n {self.samples_per_file} -s {self.random_seed}"

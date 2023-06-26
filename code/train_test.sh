@@ -1,17 +1,18 @@
 #!/bin/bash
+# Similar to train.sh but uses a smaller dataset for debugging purposes
+# Also only uses 1 GPU
 
-export CUDA_VISIBLE_DEVICES=0,1
-# export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
+export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=1
-
+export WANDB_PROJECT="Minerva"
 # torchrun isn't working
 # python -m torch.distributed.launch
 # --sharded_ddp zero_dp_3 works for training but not inference
 # -m torch.distributed.launch --nproc_per_node 2
 # save+eval 1000, 10 epochs, 8 accumulation steps
 LOG_STEP=100
-# 0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0
-for k in 1.0
+RATIOS=( 0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 )
+for k in "${RATIOS[@]}"
 do
   OUTPUT_DIR="${MINERVA_HOME}/models/finetune_shuffle/ratio_${k}"
   OUTPUT_DIR="${MINERVA_HOME}/models/test"
@@ -20,22 +21,22 @@ do
 
   echo "Training model with key instance ratio ${k}. Saving to ${OUTPUT_DIR}"
 
-  python -m torch.distributed.launch --nproc_per_node 2 "${MINERVA_HOME}/code/train_mil.py" \
+  python "${MINERVA_HOME}/code/train_mil.py" \
+    --dataset_dir "${MINERVA_HOME}/data/premade_mil_test" \
     --sample_instances False \
     --finetune_instance_model False \
-    --run_name "finetune-${k}" \
+    --run_name "test-finetune-${k}" \
     --key_instance_ratio "${k}" \
     --output_dir "${OUTPUT_DIR}" \
     --logging_dir "${LOG_DIR}" \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 4 \
-    --per_device_eval_batch_size 5 \
+    --per_device_eval_batch_size 2 \
     --learning_rate 1e-5 \
-    --num_train_epochs 1 \
+    --num_train_epochs 2 \
     --num_tweets_per_day 100 \
     --do_train \
     --do_eval \
-    --do_predict \
     --logging_strategy "steps" \
     --log_on_each_node 0 \
     --logging_steps ${LOG_STEP} \
@@ -52,7 +53,8 @@ do
     --seed 42 \
     --dataloader_pin_memory False \
     --ddp_find_unused_parameters False \
-    --resume_from_checkpoint False
+    --resume_from_checkpoint False \
+    --report_to wandb
 
   if [ $? -ne 0 ]
   then

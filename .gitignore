@@ -1,6 +1,9 @@
 # Project-specific
 data/tweets_en
 models
+code/wandb
+data/premade_*
+
 
 #######################
 # Byte-compiled / optimized / DLL files

@@ -75,6 +75,7 @@ class TopKBagModel(torch.nn.Module):
         # Bag probability is the average of the top key_instances
         # Only consider the non-padded values
         num_key_instances = self.calc_num_key_instances(mask)
+        num_key_instances = num_key_instances.unsqueeze(1)
         bag_probs = torch.empty(X.size(0), device=mask.device)
         key_instances = []
         for i, (probs, k, m) in enumerate(zip(X, num_key_instances, mask)):
@@ -85,8 +86,11 @@ class TopKBagModel(torch.nn.Module):
         return bag_probs.unsqueeze(-1), key_instances
 
     def calc_num_key_instances(self, mask):
+        """
+        Mask is of shape [batch (i.e., bags), 1, instances]
+        """
         k = torch.max(
-            torch.floor(self.key_instance_ratio * mask.sum(dim=1)),
+            torch.floor(self.key_instance_ratio * mask.sum(dim=-1)),
             torch.tensor([1], device=mask.device)
         ).type(dtype=torch.long)
         return k
@@ -126,7 +130,7 @@ class MILModel(torch.nn.Module):
             for name, param in self.instance_model.model.roberta.named_parameters():
                 param.requires_grad = False
 
-    def forward(self, input_ids, attention_mask, mask, labels, instance_scores, instance_ids, **kwargs):
+    def forward(self, input_ids, attention_mask, bag_mask, labels, instance_scores, instance_ids, **kwargs):
         """
         Bags are flattened
         Accepts **kwargs to handle HuggingFace trainer
@@ -135,10 +139,11 @@ class MILModel(torch.nn.Module):
         # Get instance probs
         instance_probs = self.instance_model(input_ids, attention_mask, reshape=instance_scores.shape)
         # y and bag_probs = [#batch, 1]
-        bag_probs, key_instance_idx = self.bag_model(instance_probs, mask)
+        bag_probs, key_instance_idx = self.bag_model(instance_probs, bag_mask)
         # Map the key instance indices to the actual instance IDs for later analysis
         key_instances = []
         for b_idx, b_id in zip(key_instance_idx, instance_ids):
+            b_idx = b_idx.squeeze(0)
             key_instances.append([b_id[i] for i in b_idx])
         # Calculate loss
         loss = None
@@ -146,8 +151,8 @@ class MILModel(torch.nn.Module):
             labels = labels.unsqueeze(-1)
             # if len(labels.shape) == 1:  # Fix for batch size of 1
             #     labels = labels.unsqueeze(0)
-            loss = self.calculate_loss(bag_probs, instance_probs, mask, labels, instance_scores)
-        logger.debug(f"{os.environ.get('LOCAL_RANK')=}\n{input_ids.shape=}\n{mask.shape=}\n{instance_probs.shape=}\n{bag_probs.shape=}")
+            loss = self.calculate_loss(bag_probs, instance_probs, bag_mask, labels, instance_scores)
+        logger.debug(f"{os.environ.get('LOCAL_RANK')=}\n{input_ids.shape=}\n{bag_mask.shape=}\n{instance_probs.shape=}\n{bag_probs.shape=}")
         output = {}
         if loss:
             output["loss"] = loss
@@ -168,7 +173,7 @@ class MILModel(torch.nn.Module):
             # Only return classifier head
             return [p[1] for p in self.named_parameters() if "classifier" in p[0]]
 
-    def calculate_loss(self, bag_probs, instance_probs, mask, y=None, y_instance=None):
+    def calculate_loss(self, bag_probs, instance_probs, bag_mask, y=None, y_instance=None):
         # Empty loss in case labels are not passed
         loss = torch.tensor(0.0, device=bag_probs.device)
         # 1. Bag-level loss (Binary cross-entropy)
@@ -180,8 +185,8 @@ class MILModel(torch.nn.Module):
         # Scale instance loss by amount of effect we want
         if y_instance is not None:
             instance_loss = self.instance_model.calculate_loss(instance_probs, y_instance)
-            num_key_instances = self.bag_model.calc_num_key_instances(mask)
-            instance_loss = (instance_loss * mask).sum() / num_key_instances.sum()
+            num_key_instances = self.bag_model.calc_num_key_instances(bag_mask)
+            instance_loss = (instance_loss * bag_mask).sum() / num_key_instances.sum()
             loss = loss + (instance_loss * self.instance_level_loss)
         return loss
 

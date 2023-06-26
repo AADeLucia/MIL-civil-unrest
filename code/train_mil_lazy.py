@@ -15,7 +15,7 @@ from transformers import Trainer, TrainingArguments, HfArgumentParser
 from transformers import AutoTokenizer
 from dataclasses import dataclass, field
 from mil_model import MILModel, compute_metrics
-from mil_dataset import MILTwitterDataset
+from mil_dataset import MILTwitterDatasetLazy, get_acled_labels
 
 
 # Setup logging
@@ -32,20 +32,29 @@ logging.basicConfig(
 ##################
 @dataclass
 class ExperimentArguments:
-    dataset_dir: str = field(
-        default=f"{os.environ['MINERVA_HOME']}/data/premade_mil",
+    train_files: str = field(
+        default=f"{os.environ['MINERVA_HOME']}/data/tweets_en/201[456]_.*.gz",
+    )
+    valid_files: str = field(
+        default=f"{os.environ['MINERVA_HOME']}/data/tweets_en/2017_.*.gz"
+    )
+    test_files: str = field(
+        default=f"{os.environ['MINERVA_HOME']}/data/tweets_en/201[89]_.*.gz"
+    )
+    acled_event_data: str = field(
+        default=f"{os.environ['MINERVA_HOME']}/data/2014-01-01-2020-01-01_acled_reduced_all.csv"
     )
     instance_model: str = field(
         default="vinai/bertweet-base"
     )
-    sample_instances: bool = field(
+    shuffle_samples: bool = field(
         default=False
     )
     finetune_instance_model: bool = field(
         default=True
     )
     num_tweets_per_day: int = field(
-        default=10
+        default=1000
     )
     key_instance_ratio: float = field(
         default=0.2
@@ -69,9 +78,7 @@ def main():
     # Set rank in script instead of program arguments
     # Set variable to -1 if not using distributed training
     train_args.local_rank = int(os.environ.get('LOCAL_RANK', -1))
-
-    # Fix --resume_from_checkpoint
-    train_args.resume_from_checkpoint = train_args.resume_from_checkpoint == "True"
+    logger.info(f"{train_args.local_rank=}")
 
     # Set the main code and the modules it uses to the same log-level according to the node
     log_level = train_args.get_process_log_level()
@@ -94,31 +101,17 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(exp_args.instance_model)
 
     # Set up dataset
-    train_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/train.jsonl",
-        tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
-        sample_instances=exp_args.sample_instances,
-        random_seed=train_args.seed
-    )
-
-    eval_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/val.jsonl",
-        tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
-        random_seed=train_args.seed
-    )
-    test_dataset = MILTwitterDataset(
-        f"{exp_args.dataset_dir}/test.jsonl",
-        tokenizer,
-        samples_per_bag=exp_args.num_tweets_per_day,
-        random_seed=train_args.seed
-    )
-
-    # loader = torch.utils.data.DataLoader(train_dataset, batch_size=2, collate_fn=train_dataset.collate_function)
-    # for batch in loader:
-    #     logger.info(batch.keys())
-    #     import pdb;pdb.set_trace()
+    positive_bags = get_acled_labels(exp_args.acled_event_data)
+    train_dataset = MILTwitterDatasetLazy.from_glob(exp_args.train_files, positive_bags, tokenizer,
+                                                samples_per_file=exp_args.num_tweets_per_day,
+                                                shuffle_samples=exp_args.shuffle_samples,
+                                                random_seed=train_args.seed)
+    eval_dataset = MILTwitterDatasetLazy.from_glob(exp_args.valid_files, positive_bags, tokenizer,
+                                               samples_per_file=exp_args.num_tweets_per_day,
+                                               shuffle_samples=False, random_seed=train_args.seed)
+    test_dataset = MILTwitterDatasetLazy.from_glob(exp_args.test_files, positive_bags, tokenizer,
+                                               samples_per_file=exp_args.num_tweets_per_day,
+                                               shuffle_samples=False, random_seed=train_args.seed)
 
     # Training
     # Make sure there is a checkpoint if --resume_from_checkpoint
@@ -126,8 +119,6 @@ def main():
         if not os.path.exists(f"{train_args.output_dir}/trainer_state.json"):
             train_args.resume_from_checkpoint = False
             logger.warning(f"Checkpoint not found at {train_args.output_dir}. Not resuming from checkpoint.")
-        else:
-            logger.info(f"Resuming from checkpoint {train_args.output_dir}")
     trainer = Trainer(
         args=train_args,
         model=model,
@@ -142,7 +133,7 @@ def main():
         logger.info("*** Train ***")
         train_result = trainer.train(
             ignore_keys_for_eval=ignore_keys,
-            resume_from_checkpoint=train_args.resume_from_checkpoint
+            resume_from_checkpoint=bool(train_args.resume_from_checkpoint)
         )
         trainer.save_model()
         metrics = train_result.metrics
@@ -166,10 +157,12 @@ def main():
 
     # Perform inference. Does not return key instances, only returns bag prediction
     if train_args.do_predict:
-        logger.warning(f"Prediction does not work. Skipping.")
-    #     logger.info("*** Predict ***")
-    #     prediction_output = trainer.predict(eval_dataset, metric_key_prefix="predict", ignore_keys=ignore_keys)
-    #     prediction_output = trainer.predict(test_dataset, metric_key_prefix="test_predict", ignore_keys=ignore_keys)
+        logger.info("*** Predict ***")
+        prediction_output = trainer.predict(eval_dataset, metric_key_prefix="predict", ignore_keys=ignore_keys)
+        logger.info(f"{prediction_output=}")
+
+        prediction_output = trainer.predict(test_dataset, metric_key_prefix="test_predict", ignore_keys=ignore_keys)
+        logger.info(f"{prediction_output=}")
 
 
 if __name__ == "__main__":
