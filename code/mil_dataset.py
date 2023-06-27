@@ -49,6 +49,7 @@ class MILTwitterDataset(torch.utils.data.Dataset):
         self.samples_per_bag = samples_per_bag
         self.sampler = random.Random(random_seed)
         self.tokenizer = tokenizer
+        self.pad = -100
 
     def __getitem__(self, index):
         # Retrieve bag at index
@@ -78,10 +79,11 @@ class MILTwitterDataset(torch.utils.data.Dataset):
         collated = {
             "instance_scores": [],
             "bag_mask": [],
-            "instance_text": [],
             "instance_ids": []
         }
-        max_instances = max([b['num_instances'] for b in batch])
+        instance_text = []
+        # max_instances = max([b['num_instances'] for b in batch])
+        max_instances = self.samples_per_bag
         for i, temp in enumerate(batch):
             for key in temp.keys():
                 if key == "instances":
@@ -97,42 +99,30 @@ class MILTwitterDataset(torch.utils.data.Dataset):
 
             # Handle padding
             mask = torch.zeros((1, max_instances))
-            scores = torch.ones((1, max_instances)) * -1
+            scores = torch.ones((1, max_instances)) * self.pad
             text = [self.tokenizer.pad_token] * max_instances
-            ids = []
+            ids = torch.ones((1, max_instances)) * self.pad
 
             for j, t in enumerate(temp["instances"]):
                 scores[0][j] = t["civil_unrest_score"]
                 text[j] = t["tweet_text"]
                 mask[0][j] = 1
-                ids.append(t["id_str"])
-                #
-                # for key in t.keys():
-                #     if key in ["civil_unrest_score", "tweet_text"]:
-                #         continue
-                #     val = t[key]
-                #     if key == "id_str":
-                #         key = "instance_ids"
-                #     if key in collated:
-                #         collated[key].append(val)
-                #     else:
-                #         collated[key] = [val]
+                ids[0][j] = torch.tensor(t["id_str"], dtype=torch.long)
+
             collated["instance_scores"].append(scores)
             collated["bag_mask"].append(mask)
-            collated["instance_text"].append(text)
+            instance_text.extend(text)
             collated["instance_ids"].append(ids)
 
         # Stack tensors here
         collated["bag_mask"] = torch.stack(collated["bag_mask"], dim=0)
         collated["instance_scores"] = torch.stack(collated["instance_scores"], dim=0)
+        collated["instance_ids"] = torch.stack(collated["instance_ids"], dim=0)
         collated["labels"] = torch.stack(collated["labels"], dim=0)
         # Pass tokenized text to model
         # DataParallel cannot split lists across GPUs, only tensors
-        tweet_text = []
-        for text in collated["instance_text"]:
-            tweet_text.extend(text)
         token_inputs = self.tokenizer.batch_encode_plus(
-            tweet_text,
+            instance_text,
             return_tensors="pt",
             truncation="longest_first",
             padding=True

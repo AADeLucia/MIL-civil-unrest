@@ -13,7 +13,9 @@ export WANDB_RUN_GROUP="Test"
 # -m torch.distributed.launch --nproc_per_node 2
 # save+eval 1000, 10 epochs, 8 accumulation steps
 LOG_STEP=100
-RATIOS=( 0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 0.0 )
+RATIOS=( 1.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 0.0 )
+# Original was 1e-5
+LR=10
 for k in "${RATIOS[@]}"
 do
   OUTPUT_DIR="${MINERVA_HOME}/models/test/ratio_${k}"
@@ -33,19 +35,17 @@ do
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 4 \
     --per_device_eval_batch_size 2 \
-    --learning_rate 1e-5 \
+    --learning_rate "${LR}" \
     --num_train_epochs 2 \
     --num_tweets_per_day 100 \
-    --do_train \
-    --do_eval \
     --logging_strategy "steps" \
     --log_on_each_node 0 \
     --logging_steps ${LOG_STEP} \
     --log_level "info" \
     --save_strategy "steps" \
     --save_steps 1000 \
-    --evaluation_strategy "steps" \
     --eval_steps 1000 \
+    --evaluation_strategy "steps" \
     --optim "adamw_torch" \
     --load_best_model_at_end True \
     --metric_for_best_model "f1" \
@@ -54,8 +54,9 @@ do
     --seed 42 \
     --dataloader_pin_memory False \
     --ddp_find_unused_parameters False \
-    --resume_from_checkpoint False \
-    --report_to wandb
+    --report_to wandb \
+    --do_train True \
+    --do_predict True \
 
   if [ $? -ne 0 ]
   then

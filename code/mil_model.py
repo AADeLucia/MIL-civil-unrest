@@ -4,6 +4,8 @@ Base Multi-instance learning framework in PyTorch/HuggingFace
 Author: Alexandra DeLucia
 """
 import random
+
+import transformers
 from sklearn.metrics import precision_recall_fscore_support
 import pandas as pd
 import numpy as np
@@ -77,11 +79,11 @@ class TopKBagModel(torch.nn.Module):
         num_key_instances = self.calc_num_key_instances(mask)
         num_key_instances = num_key_instances.unsqueeze(1)
         bag_probs = torch.empty(X.size(0), device=mask.device)
-        key_instances = []
+        key_instances = torch.ones((X.size(0), num_key_instances.max()), dtype=torch.long) * -100
         for i, (probs, k, m) in enumerate(zip(X, num_key_instances, mask)):
             top_instance_probs, top_instance_indices = torch.topk(probs * m, k.item())
-            bag_probs[i] = torch.mean(top_instance_probs)
-            key_instances.append(top_instance_indices)
+            bag_probs[i] = self.aggregate_function(top_instance_probs)
+            key_instances[i, :k.item()] = top_instance_indices
             logger.debug(f"{k.item()=}\n{top_instance_probs=}\n{top_instance_indices=}")
         return bag_probs.unsqueeze(-1), key_instances
 
@@ -98,6 +100,9 @@ class TopKBagModel(torch.nn.Module):
     @staticmethod
     def calculate_loss(bag_probs, y):
         return torch.nn.functional.binary_cross_entropy(bag_probs, y)
+
+    def aggregate_function(self, instance_probabilities):
+        return torch.mean(instance_probabilities)
 
 
 @dataclass
@@ -141,28 +146,26 @@ class MILModel(torch.nn.Module):
         # y and bag_probs = [#batch, 1]
         bag_probs, key_instance_idx = self.bag_model(instance_probs, bag_mask)
         # Map the key instance indices to the actual instance IDs for later analysis
-        key_instances = []
-        for b_idx, b_id in zip(key_instance_idx, instance_ids):
-            b_idx = b_idx.squeeze(0)
-            key_instances.append([b_id[i] for i in b_idx])
+        # Needs to be a tensor (i.e., all the same size) for the distributed batching
+        key_instances = torch.ones_like(instance_ids) * -100
+        for i, (b_idx, b_id) in enumerate(zip(key_instance_idx.squeeze(), instance_ids.squeeze())):
+            # Remove padded values because -100 is treated as an index
+            b_idx = np.delete(b_idx, np.where(b_idx==-100))
+            key_instances[i, 0, :b_idx.shape[0]] = b_id[b_idx]
+        output = {
+            "loss": None,
+            "logits": bag_probs,
+            "instance_probs": instance_probs,
+            "key_instances": key_instances
+        }
         # Calculate loss
-        loss = None
         if labels is not None:
             labels = labels.unsqueeze(-1)
             # if len(labels.shape) == 1:  # Fix for batch size of 1
             #     labels = labels.unsqueeze(0)
-            loss = self.calculate_loss(bag_probs, instance_probs, bag_mask, labels, instance_scores)
-        logger.debug(f"{os.environ.get('LOCAL_RANK')=}\n{input_ids.shape=}\n{bag_mask.shape=}\n{instance_probs.shape=}\n{bag_probs.shape=}")
-        output = {}
-        if loss:
-            output["loss"] = loss
-        output.update({
-            "logits": bag_probs,
-            "instance_probs": instance_probs,
-            "key_instances": key_instances
-        })
+            output["loss"] = self.calculate_loss(bag_probs, instance_probs, bag_mask, labels, instance_scores)
         output = MILClassifierOutput(output)
-        logger.debug(f"{output=}")
+        logger.debug(f"{output.loss=}")
         return output
 
     def get_parameters(self):
@@ -193,16 +196,33 @@ class MILModel(torch.nn.Module):
     @classmethod
     def from_pretrained(cls, model_path):
         """Load a pretrained model. Function models HuggingFace from_pretrained"""
-        m = MILModel()
-        m.load_state_dict(model_path)
+        # Load training arguments. Sloppy but works.
+        # Eventually should try to do a nice HF model with a config
+        settings = torch.load(
+            f"{model_path}/training_args.bin"
+        )
+        m = MILModel(
+            instance_model_path=settings.instance_model,
+            key_instance_ratio=settings.key_instance_ratio,
+            finetune_instance_model=settings.finetune_instance_model,
+            instance_level_loss=settings.instance_level_loss
+        )
+        m.load_state_dict(
+            torch.load(f"{model_path}/pytorch_model.bin")
+        )
         return m
 
 
 def compute_metrics(eval_prediction):
-    logger.info(f"{eval_prediction=}")
     # Model returns probabilities instead of logits
     # Also, uses -100 as a padding value. Do not keep the padding.
-    probs = eval_prediction.predictions.reshape(-1)
+    # Only need the bag probabilities, not the instance or key instances
+    # eval_prediction.predictions is a tuple when no ignore_keys are set
+    if isinstance(eval_prediction.predictions, tuple):
+        probs = eval_prediction.predictions[0]
+    else:
+        probs = eval_prediction.predictions
+    probs = probs.reshape(-1)
     probs = np.delete(probs, np.where(probs == -100))
     predictions = (probs > 0.5).astype(np.uint8)
     label_ids = eval_prediction.label_ids
@@ -216,4 +236,3 @@ def compute_metrics(eval_prediction):
         "recall": recall,
         "f1": f1
     }
-
