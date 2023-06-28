@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import precision_recall_fscore_support
+from sklearn import metrics
 
 
 # Setup logging
@@ -68,8 +68,14 @@ def collate_function(batch, tokenizer):
 
 def prepare_data(filepath, seed, test_size, label):
     # Load full labels
+    # Remove non-English
     data = pd.read_csv(filepath)
+    data = data[data["is_event"]!="notenglish"]
+
+    # Label according to desired annotation
+    # See https://aclanthology.org/2020.wnut-1.28/ for details
     data["label"] = data[label].map(lambda x: 1 if x == "yes" else 0)
+    logger.info(f"{data.label.sum()=}\t{len(data)}")
 
     # Split
     train_val, test = train_test_split(data, random_state=seed, test_size=test_size, stratify=data["label"])
@@ -84,15 +90,15 @@ def compute_metrics(eval_prediction):
     probs = eval_prediction.predictions.reshape(-1)
     predictions = (probs > 0.5).astype(np.uint8)
     label_ids = eval_prediction.label_ids
-    try:
-        prec, recall, f1, support = precision_recall_fscore_support(label_ids, predictions, zero_division=0, average="weighted")
-    except ValueError as err:
-        logger.error(f"{err=}\n{eval_prediction.predictions.shape=}\n{eval_prediction.label_ids.shape=}")
-        exit(1)
+    prec, recall, f1, support = metrics.precision_recall_fscore_support(label_ids, predictions, zero_division=0, average="weighted")
+    acc = metrics.accuracy_score(label_ids, predictions)
+    pos_f1 = metrics.f1_score(label_ids, predictions, average="binary", pos_label=1)
     return {
+        "accuracy": acc,
         "precision": prec,
         "recall": recall,
-        "f1": f1
+        "f1": f1,
+        "positive_f1": pos_f1
     }
 
 
@@ -155,6 +161,7 @@ def main():
 
     # Load data
     train_dataset, eval_dataset, test_dataset = prepare_data(train_args.data_path, train_args.seed, 0.1, train_args.label)
+    logger.info(f"{len(train_dataset)=}\t{len(eval_dataset)=}\t{len(test_dataset)=}")
 
     # Initialize model
     def model_init(trial):
@@ -230,9 +237,14 @@ def main():
     )
     result = trainer.train()
     trainer.save_model()
+    trainer.save_state()
+
     trainer.log_metrics("train", result.metrics)
     trainer.save_metrics("train", result.metrics)
-    trainer.save_state()
+
+    metrics = trainer.evaluate(eval_dataset=test_dataset)
+    trainer.log_metrics("test", metrics)
+    trainer.save_metrics("test", metrics)
 
 
 if __name__ == "__main__":
