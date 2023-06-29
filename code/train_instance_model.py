@@ -17,7 +17,7 @@ import torch
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn import metrics
-
+from sklearn import preprocessing
 
 # Setup logging
 logger = logging.getLogger()
@@ -30,6 +30,8 @@ logging.basicConfig(
 
 class CUTDataset(torch.utils.data.Dataset):
     """
+    Takes Pandas DataFrame as input
+
     https://pytorch.org/docs/stable/_modules/torch/utils/data/dataset.html#Dataset
     """
     def __init__(self, data):
@@ -80,19 +82,37 @@ def prepare_data(filepath, seed, test_size, label):
     # Split
     train_val, test = train_test_split(data, random_state=seed, test_size=test_size, stratify=data["label"])
     train, val = train_test_split(train_val, random_state=seed, test_size=0.1, stratify=train_val["label"])
+    pos_prevalence = train.label.sum()
+
+    # Get One-hot encoding for class label
+    # Works better with HuggingFace AutoSequenceClassification and torch CrossEntropyLoss
+    # [0, 1] -> [[1, 0], [0, 1]]
+    # Manual one-hot encoding of labels because other implementations are annoying me
+    # train["label"] = train.label.map(lambda x: [1, 0] if x==0 else [0, 1])
+    # val["label"] = val.label.map(lambda x: [1, 0] if x==0 else [0, 1])
+    # test["label"] = test.label.map(lambda x: [1, 0] if x==0 else [0, 1])
+
+    # Calculate weights based off train split
+    # wj = n_samples / (n_classes * n_samplesj)
+    pos_class_weight = len(train) / (train.label.nunique() * pos_prevalence)
+    logger.info(f"{pos_class_weight=}")
+
     train = CUTDataset(train)
     val = CUTDataset(val)
     test = CUTDataset(test)
-    return train, val, test
+    return train, val, test, pos_class_weight
 
 
 def compute_metrics(eval_prediction):
-    probs = eval_prediction.predictions.reshape(-1)
-    predictions = (probs > 0.5).astype(np.uint8)
+    logits = eval_prediction.predictions.reshape(-1)
+    # Calculate probability from logits with sigmoid
+    probs = 1/(1 + np.exp(-logits))
+    preds = (probs > 0.5).astype(np.uint8)
     label_ids = eval_prediction.label_ids
-    prec, recall, f1, support = metrics.precision_recall_fscore_support(label_ids, predictions, zero_division=0, average="weighted")
-    acc = metrics.accuracy_score(label_ids, predictions)
-    pos_f1 = metrics.f1_score(label_ids, predictions, average="binary", pos_label=1)
+    prec, recall, f1, support = metrics.precision_recall_fscore_support(label_ids, preds, zero_division=0, average="weighted")
+    acc = metrics.accuracy_score(label_ids, preds)
+    pos_f1 = metrics.f1_score(label_ids, preds, average="binary", pos_label=1)
+    logger.debug(f"{probs=}\n{logits=}\n{preds=}")
     return {
         "accuracy": acc,
         "precision": prec,
@@ -100,6 +120,27 @@ def compute_metrics(eval_prediction):
         "f1": f1,
         "positive_f1": pos_f1
     }
+
+
+class WeightedLossTrainer(Trainer):
+    # https://huggingface.co/docs/transformers/main_classes/trainer#trainer
+    # Modified example from documentation
+    # Weighted loss resources
+    # https://pytorch.org/docs/stable/generated/torch.nn.BCEWithLogitsLoss.html#torch.nn.BCEWithLogitsLoss
+    # https://github.com/scikit-learn/scikit-learn/blob/2a2772a87b6c772dc3b8292bcffb990ce27515a8/sklearn/utils/class_weight.py#L10
+    # https://stackoverflow.com/questions/71768061/huggingface-transformers-classification-using-num-labels-1-vs-2
+    def compute_loss(self, model, inputs, return_outputs=False):
+        labels = inputs.get("labels")
+        # Forward pass of model
+        outputs = model(**inputs)
+        logits = outputs.get("logits")
+        # Compute custom loss with weights for each label
+        # Use custom self.args.pos_class_weight
+        weights = torch.ones(logits.shape[1], device=model.device) * self.args.pos_class_weight
+        loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=weights)
+        logger.debug(f"{logits=}\n{logits.shape=}\n{labels=}\n{labels.shape=}\n{logits.view(-1, self.model.config.num_labels)=}")
+        loss = loss_fct(logits, labels)
+        return (loss, outputs) if return_outputs else loss
 
 
 ################
@@ -160,8 +201,9 @@ def main():
     random.seed(train_args.seed)
 
     # Load data
-    train_dataset, eval_dataset, test_dataset = prepare_data(train_args.data_path, train_args.seed, 0.1, train_args.label)
-    logger.info(f"{len(train_dataset)=}\t{len(eval_dataset)=}\t{len(test_dataset)=}")
+    train_dataset, eval_dataset, test_dataset, pos_class_weight = prepare_data(train_args.data_path, train_args.seed, 0.1, train_args.label)
+    setattr(train_args, "pos_class_weight", pos_class_weight)
+    logger.info(f"{len(train_dataset)=}\t{len(eval_dataset)=}\t{len(test_dataset)=}\n{pos_class_weight=}")
 
     # Initialize model
     def model_init(trial):
@@ -199,7 +241,7 @@ def main():
     # Hyperparameter search
     # Does not play nice with 'compute metrics', so just basing best model
     # off of eval_loss is fine.
-    hyp_trainer = Trainer(
+    hyp_trainer = WeightedLossTrainer(
         args=train_args,  # training arguments, defined above
         train_dataset=train_dataset,  # training dataset
         eval_dataset=eval_dataset,  # evaluation dataset,
@@ -225,8 +267,7 @@ def main():
     # Hack because of stupid bug
     # https://github.com/huggingface/transformers/issues/22429
     setattr(train_args, "report_to", ["wandb"])
-    logger.info(f"{train_args=}")
-    trainer = Trainer(
+    trainer = WeightedLossTrainer(
         args=train_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
