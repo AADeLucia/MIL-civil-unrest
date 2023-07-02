@@ -113,7 +113,7 @@ def is_spam(tweet_text):
     return (num_content_tokens < 3) or (num_hashtag_tokens > 3) or (num_handle_tokens > 3)
 
 
-def create_bag_from_file(file, labels, num_tweets):
+def create_bag_from_file(file, labels, num_tweets, min_tweets):
     # Get bag ID
     id = country_date_from_file(file)
     label = int(id in labels)
@@ -122,6 +122,7 @@ def create_bag_from_file(file, labels, num_tweets):
     df = pd.read_json(file, lines=True)
     text_col = "full_text" if "full_text" in df.columns else "text"
     df.rename(columns={text_col: "tweet_text"}, inplace=True)
+    total_tweets = len(df)
 
     # Drop duplicates
     df.drop_duplicates(subset="id_str", inplace=True)
@@ -136,9 +137,15 @@ def create_bag_from_file(file, labels, num_tweets):
 
     # Remove spam-like tweets
     df = df[~df.tweet_text.map(is_spam)]
+    total_cleaned_tweets = len(df)
 
-    # Sample
-    if num_tweets < len(df):
+    # Check minimum tweets
+    if len(df) < min_tweets:
+        logger.debug(f"{file=} did not have at least {min_tweets:,} instances. Skipping.")
+        return
+
+    # Sample for max tweets
+    if num_tweets != -1 and num_tweets < len(df):
         df = df.sample(n=num_tweets, random_state=SEED)
 
     # Fill in scores
@@ -150,20 +157,24 @@ def create_bag_from_file(file, labels, num_tweets):
 
     instances = df[KEEP_METADATA].to_dict(orient="records")
 
+    logger.debug(f"{len(instances)=}")
     return {
         "bag_id": id,
         "filename": file,
         "num_instances": len(instances),
         "label": label,
-        "instances": instances
+        "instances": instances,
+        "total_instances": total_tweets,
+        "total_eligible_instances": total_cleaned_tweets
     }
 
 
-def create_dataset(files, labels, num_tweets, output_file, n_cpu):
+def create_dataset(files, output_file, labels, num_tweets, min_tweets, n_cpu):
+    partial_bag_fn = partial(create_bag_from_file, labels=labels, num_tweets=num_tweets, min_tweets=min_tweets)
     if n_cpu == -1:
         bags = []
         for input_file in tqdm(files, ncols=0, desc="File"):
-            bag = create_bag_from_file(input_file, labels, num_tweets)
+            bag = partial_bag_fn(input_file)
             bags.append(bag)
             if logger.getEffectiveLevel()==logging.DEBUG and len(bags) > 100:
                 break
@@ -171,7 +182,6 @@ def create_dataset(files, labels, num_tweets, output_file, n_cpu):
         # https://docs.python.org/3/library/functools.html#functools.partial
         # https://miguendes.me/how-to-pass-multiple-arguments-to-a-map-function-in-python#using-partial-with-a-processpoolexecutor-or-threadpoolexecutor
         # https://towardsdatascience.com/parallelism-with-python-part-1-196f0458ca14
-        partial_bag_fn = partial(create_bag_from_file, labels=labels, num_tweets=num_tweets)
         bags = process_map(
             partial_bag_fn,
             files,
@@ -200,20 +210,29 @@ def main():
     # Get the labels
     labels = set(get_acled_labels(args.acled_file))
 
+    # Create convenience function for less repetition
+    partial_dataset_fn = partial(
+        create_dataset,
+        labels=labels,
+        num_tweets=args.max_instances,
+        min_tweets=args.min_instances,
+        n_cpu=args.n_cpu
+    )
+
     # Train set
     logger.info(f"On train set")
     train_files = files_from_glob(args.train_files)
-    create_dataset(train_files, labels, args.max_instances, f"{args.output_dir}/train.jsonl", args.n_cpu)
+    partial_dataset_fn(train_files, f"{args.output_dir}/train.jsonl")
 
     # Validation set
     logger.info(f"On val set")
     val_files = files_from_glob(args.val_files)
-    create_dataset(val_files, labels, args.max_instances, f"{args.output_dir}/val.jsonl", args.n_cpu)
+    partial_dataset_fn(val_files, f"{args.output_dir}/val.jsonl")
 
     # Test set
     logger.info(f"On test set")
     test_files = files_from_glob(args.test_files)
-    create_dataset(test_files, labels, args.max_instances, f"{args.output_dir}/test.jsonl", args.n_cpu)
+    partial_dataset_fn(test_files, f"{args.output_dir}/test.jsonl")
 
 
 def parse_args():
@@ -223,9 +242,12 @@ def parse_args():
     parser.add_argument("--test-files", required=True, type=str, help="Tweet files for the test set")
     parser.add_argument("--output-dir", required=True, type=str, help="Output directory for file results")
     parser.add_argument("--max-instances", default=-1, type=int, help="Max instances (tweets) per bag (file). -1 means keep all.")
-    parser.add_argument("--min-tokens", default=3, type=int, help="Minimum # of tokens to keep tweet. does not include URLs and handles.")
-    parser.add_argument("--acled-file", type=str, default=f"{os.environ['MINERVA_HOME']}/data/2014-01-01-2020-01-01_acled_reduced_all.csv")
-    parser.add_argument("--n-cpu", type=int, default=-1)
+    parser.add_argument("--min-instances", default=0, type=int, help="Min instances (tweets) per bag (file).")
+    parser.add_argument("--instance-model", type=str, help="Path to model to score instances")
+    # Hard-coded to 3
+    # parser.add_argument("--min-tokens", default=3, type=int, help="Minimum # of tokens to keep tweet. Does not include URLs and handles.")
+    parser.add_argument("--acled-file", type=str, default=f"{os.environ['MINERVA_HOME']}/data/2014-01-01-2020-01-01_acled_reduced_all.csv", help="Labels for data")
+    parser.add_argument("--n-cpu", type=int, default=-1, help="Set to >1 for parallelization")
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 

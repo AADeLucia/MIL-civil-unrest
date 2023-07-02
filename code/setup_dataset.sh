@@ -1,6 +1,6 @@
 #!/bin/bash
 
-OUTPUT_DIR="${MINERVA_HOME}/data/premade_mil"
+OUTPUT_DIR="${MINERVA_HOME}/data/premade_mil_test"
 mkdir -p "${OUTPUT_DIR}"
 
 python "${MINERVA_HOME}/code/create_dataset.py" \
@@ -10,5 +10,7 @@ python "${MINERVA_HOME}/code/create_dataset.py" \
   --test-files "${MINERVA_HOME}/data/tweets_en/201[89]_.*.gz" \
   --acled-file "${MINERVA_HOME}/data/2014-01-01-2020-01-01_acled_reduced_all.csv" \
   --max-instances 1000 \
-  --n-cpu 20 \
+  --min-instances 100 \
+  --n-cpu -1 \
+  --debug
 

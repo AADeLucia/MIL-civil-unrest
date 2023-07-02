@@ -84,14 +84,6 @@ def prepare_data(filepath, seed, test_size, label):
     train, val = train_test_split(train_val, random_state=seed, test_size=0.1, stratify=train_val["label"])
     pos_prevalence = train.label.sum()
 
-    # Get One-hot encoding for class label
-    # Works better with HuggingFace AutoSequenceClassification and torch CrossEntropyLoss
-    # [0, 1] -> [[1, 0], [0, 1]]
-    # Manual one-hot encoding of labels because other implementations are annoying me
-    # train["label"] = train.label.map(lambda x: [1, 0] if x==0 else [0, 1])
-    # val["label"] = val.label.map(lambda x: [1, 0] if x==0 else [0, 1])
-    # test["label"] = test.label.map(lambda x: [1, 0] if x==0 else [0, 1])
-
     # Calculate weights based off train split
     # wj = n_samples / (n_classes * n_samplesj)
     pos_class_weight = len(train) / (train.label.nunique() * pos_prevalence)
@@ -169,6 +161,9 @@ class CUTTrainingArguments(TrainingArguments):
     patience: int = field(
         default=-1
     )
+    do_hp: bool = field(
+        default=False
+    )
 
 
 def parse_args():
@@ -220,8 +215,8 @@ def main():
         return {
             "method": "random",
             "metric": {
-                "name": "objective",
-                "goal": "minimize"
+                "name": train_args.metric_for_best_model,  # doesn't work, just defaults to 'eval/loss'
+                "goal": "minimize" if "loss" in train_args.metric_for_best_model else "maximize"
             },
             "parameters": {
                 "learning_rate": {"distribution": "uniform", "min": 1e-6, "max": 1e-2},
@@ -238,35 +233,38 @@ def main():
     else:
         callbacks = None
 
-    # Hyperparameter search
-    # Does not play nice with 'compute metrics', so just basing best model
-    # off of eval_loss is fine.
-    hyp_trainer = WeightedLossTrainer(
-        args=train_args,  # training arguments, defined above
-        train_dataset=train_dataset,  # training dataset
-        eval_dataset=eval_dataset,  # evaluation dataset,
-        model_init=model_init,
-        data_collator=lambda x: collate_function(x, tokenizer),
-        callbacks=callbacks
-    )
-    best_trial = hyp_trainer.hyperparameter_search(
-        backend="wandb",
-        hp_space=wandb_hp_space,
-        n_trials=train_args.n_trials
-    )
-    logger.info(f"{best_trial=}")
-    if best_trial.hyperparameters is None:
-        logger.error(f"Hyperparameter sweep failed. Check logs.")
-        exit(1)
+    if train_args.do_hp:
+        # Hyperparameter search
+        # Does not play nice with 'compute metrics', so just basing best model
+        # off of eval_loss is fine.
+        hyp_trainer = WeightedLossTrainer(
+            args=train_args,  # training arguments, defined above
+            train_dataset=train_dataset,  # training dataset
+            eval_dataset=eval_dataset,  # evaluation dataset,
+            model_init=model_init,
+            data_collator=lambda x: collate_function(x, tokenizer),
+            callbacks=callbacks,
+            compute_metrics=compute_metrics
+        )
+        best_trial = hyp_trainer.hyperparameter_search(
+            backend="wandb",
+            hp_space=wandb_hp_space,
+            n_trials=train_args.n_trials
+        )
+        logger.info(f"{best_trial=}")
+        if best_trial.hyperparameters is None:
+            logger.error(f"Hyperparameter sweep failed. Check logs.")
+            exit(1)
 
-    # HuggingFace trainer does not load the best model at end
-    # and trainer.state only holds the LAST model, not the BEST model
-    # Re-train with best settings
-    for param, value in best_trial.hyperparameters.items():
-        setattr(train_args, param, value)
-    # Hack because of stupid bug
-    # https://github.com/huggingface/transformers/issues/22429
-    setattr(train_args, "report_to", ["wandb"])
+        # HuggingFace trainer does not load the best model at end
+        # and trainer.state only holds the LAST model, not the BEST model
+        # Re-train with best settings
+        for param, value in best_trial.hyperparameters.items():
+            setattr(train_args, param, value)
+        # Hack because of stupid bug
+        # https://github.com/huggingface/transformers/issues/22429
+        setattr(train_args, "report_to", ["wandb"])
+
     trainer = WeightedLossTrainer(
         args=train_args,
         train_dataset=train_dataset,
@@ -282,6 +280,10 @@ def main():
 
     trainer.log_metrics("train", result.metrics)
     trainer.save_metrics("train", result.metrics)
+
+    metrics = trainer.evaluate(eval_dataset=eval_dataset)
+    trainer.log_metrics("val", metrics)
+    trainer.save_metrics("val", metrics)
 
     metrics = trainer.evaluate(eval_dataset=test_dataset)
     trainer.log_metrics("test", metrics)

@@ -67,7 +67,7 @@ class TopKBagModel(torch.nn.Module):
                  key_instance_ratio=1.0,
                  positive_class_weight=1.0):
         super().__init__()
-        self.key_instance_ratio = key_instance_ratio
+        self.register_buffer("key_instance_ratio", torch.tensor(key_instance_ratio))
         self.loss = torch.nn.BCELoss()
 
     def forward(self, X, mask):
@@ -126,7 +126,7 @@ class MILModel(torch.nn.Module):
         super().__init__()
         self.bag_model = TopKBagModel(key_instance_ratio)
         self.instance_model = InstanceModel(instance_model_path)
-        self.instance_level_loss = instance_level_loss
+        self.register_buffer("instance_level_loss", torch.tensor(instance_level_loss))  # beta
         self.finetune_instance_model = finetune_instance_model
 
         if not self.finetune_instance_model:
