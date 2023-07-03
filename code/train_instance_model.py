@@ -277,6 +277,7 @@ def main():
     result = trainer.train()
     trainer.save_model()
     trainer.save_state()
+    tokenizer.save_pretrained(args.output_dir)
 
     trainer.log_metrics("train", result.metrics)
     trainer.save_metrics("train", result.metrics)
