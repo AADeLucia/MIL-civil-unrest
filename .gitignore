@@ -3,6 +3,7 @@ data/tweets_en
 models
 code/wandb
 data/premade_*
+data/CUT_dataset.csv
 
 
 #######################
