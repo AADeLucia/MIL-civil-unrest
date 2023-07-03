@@ -279,6 +279,7 @@ def main():
         # Set CPU/GPU device
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         for split in ["train", "val", "test"]:
+            logger.info(f"On {split}")
             get_instance_scores(args.instance_model, f"{args.output_dir}/{split}.jsonl", device)
 
     logger.info("Done")
