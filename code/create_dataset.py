@@ -14,6 +14,8 @@ from iso3166 import countries as country_codes
 from functools import partial
 import jsonlines
 from littlebird import TweetReader, TweetTokenizer
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger()
 
@@ -33,6 +35,42 @@ KEEP_METADATA = [
 ########
 # Helpers
 ########
+def get_instance_scores(model_path, file_path, device):
+    model = AutoModelForSequenceClassification.from_pretrained(model_path).to(device)
+    model = model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+    with open(file_path) as f:
+        with jsonlines.Reader(f) as reader:
+            bags = [b for b in reader.iter()]
+
+    new_bags = []
+    for bag in tqdm(bags, ncols=0):
+        instance_text = [i["tweet_text"] for i in bag["instances"]]
+        batch = tokenizer(instance_text, padding=True, return_tensors="pt", truncation="longest_first").to(device)
+        with torch.inference_mode():
+            outputs = model(**batch)
+            logits = outputs.logits.detach()
+            probs = torch.sigmoid(logits).cpu()
+            logits = logits.cpu()
+
+        new_instances = []
+        for i, p, l in zip(bag["instances"], probs, logits):
+            new_i = {k:v for k,v in i.items()}
+            new_i["instance_score"] = p.item()
+            new_i["instance_logit"] = l.item()
+            new_instances.append(new_i)
+
+        new_bag = {k:v for k,v in bag.items() if k != "instances"}
+        new_bag["instances"] = new_instances
+        new_bags.append(new_bag)
+
+    # Overwrite file
+    with open(file_path, "w") as f:
+        with jsonlines.Writer(f) as writer:
+            writer.write_all(new_bags)
+
+
 class SpamTokenizer(TweetTokenizer):
     def __init__(self):
         super().__init__(replace_usernames_with="@USER")
@@ -192,10 +230,12 @@ def create_dataset(files, output_file, labels, num_tweets, min_tweets, n_cpu):
             total=len(files)
         )
 
-    # Save files
+    # Save
     with open(output_file, "w") as f:
         with jsonlines.Writer(f) as writer:
-            writer.write_all(bags)
+            for b in bags:
+                if b:
+                    writer.write(b)
 
 
 ########
@@ -234,6 +274,15 @@ def main():
     test_files = files_from_glob(args.test_files)
     partial_dataset_fn(test_files, f"{args.output_dir}/test.jsonl")
 
+    if args.add_instance_scores and args.instance_model:
+        logger.info(f"Adding instance scores.")
+        # Set CPU/GPU device
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        for split in ["train", "val", "test"]:
+            get_instance_scores(args.instance_model, f"{args.output_dir}/{split}.jsonl", device)
+
+    logger.info("Done")
+
 
 def parse_args():
     parser = ArgumentParser()
@@ -244,6 +293,8 @@ def parse_args():
     parser.add_argument("--max-instances", default=-1, type=int, help="Max instances (tweets) per bag (file). -1 means keep all.")
     parser.add_argument("--min-instances", default=0, type=int, help="Min instances (tweets) per bag (file).")
     parser.add_argument("--instance-model", type=str, help="Path to model to score instances")
+    parser.add_argument("--add-instance-scores", action="store_true",
+                        help="Whether to use --instance-model to calculate instance scores. Replaces scores already in files. Requires GPU access.")
     # Hard-coded to 3
     # parser.add_argument("--min-tokens", default=3, type=int, help="Minimum # of tokens to keep tweet. Does not include URLs and handles.")
     parser.add_argument("--acled-file", type=str, default=f"{os.environ['MINERVA_HOME']}/data/2014-01-01-2020-01-01_acled_reduced_all.csv", help="Labels for data")
