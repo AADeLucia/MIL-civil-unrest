@@ -17,7 +17,7 @@ dependencies:
         - wandb
         - jsonlines
         - langid
-        - transformers
+        - transformers==4.17
         - torchnet
         - littlebird-twitter-utils
         - fastBPE
