@@ -11,17 +11,14 @@ dependencies:
     - nltk
     - regex
     - pip
-    - pytorch
-    - torchvision
-    - torchaudio
-    - cudatoolkit=10.2
+    - nvidia::cudatoolkit=11.7
+    - pytorch::pytorch
     - pip:
+        - wandb
         - jsonlines
         - langid
-        - mosestokenizer
-        - transformers
+        - transformers==4.17
         - torchnet
-        - fairseq
-        - git+git://github.com/AADeLucia/littlebird.git#egg=littlebird
+        - littlebird-twitter-utils
         - fastBPE
         - iso3166

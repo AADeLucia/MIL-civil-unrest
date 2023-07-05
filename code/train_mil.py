@@ -62,6 +62,9 @@ class MILTrainingArguments(TrainingArguments):
     positive_class_weight: float = field(
         default=1.0
     )
+    patience: int = field(
+        default=-1
+    )
 
 
 def parse_args():
@@ -116,7 +119,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(train_args.instance_model)
 
     # Set up dataset
-    logger.info(f"Setting up datasets")
+    logger.info(f"Loading datasets")
     train_dataset = MILTwitterDataset(
         f"{train_args.dataset_dir}/train.jsonl",
         tokenizer,
@@ -138,6 +141,13 @@ def main():
     )
 
     # Training
+    if train_args.patience != -1:
+        # https://huggingface.co/docs/transformers/v4.30.0/en/main_classes/callback#transformers.EarlyStoppingCallback
+        callbacks = [
+            transformers.EarlyStoppingCallback(early_stopping_patience=train_args.patience)
+        ]
+    else:
+        callbacks = None
     trainer = Trainer(
         args=train_args,
         model=model,
@@ -145,7 +155,8 @@ def main():
         train_dataset=train_dataset,
         eval_dataset=eval_dataset if train_args.do_eval else None,
         compute_metrics=compute_metrics,
-        data_collator=train_dataset.collate_function
+        data_collator=train_dataset.collate_function,
+        callbacks=callbacks
     )
 
     ignore_keys = ["instance_probs", "key_instances"]

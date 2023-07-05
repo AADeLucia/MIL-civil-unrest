@@ -84,7 +84,6 @@ class MILTwitterDataset(torch.utils.data.Dataset):
             "instance_ids": []
         }
         instance_text = []
-        # max_instances = max([b['num_instances'] for b in batch])
         max_instances = self.samples_per_bag
         for i, temp in enumerate(batch):
             for key in temp.keys():

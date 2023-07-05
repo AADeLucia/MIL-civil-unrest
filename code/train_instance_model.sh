@@ -18,7 +18,7 @@ python "${MINERVA_HOME}/code/train_instance_model.py" \
 --n_trials ${TRIALS} \
 --num_train_epochs ${EPOCHS} \
 --patience ${PATIENCE} \
---save_total_limit 3 \
+--save_total_limit 2 \
 --output_dir "${OUTPUT_DIR}" \
 --logging_dir "${LOG_DIR}" \
 --per_device_train_batch_size ${BATCH} \

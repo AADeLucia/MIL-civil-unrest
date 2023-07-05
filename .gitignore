@@ -2,6 +2,7 @@
 data/tweets_en
 models
 code/wandb
+code/logs
 data/premade_*
 data/CUT_dataset.csv
 
