@@ -24,12 +24,13 @@ k=${RATIOS[${SLURM_ARRAY_TASK_ID}]}
 LOG_STEP=100
 SAVE_STEP=1000
 DATA_DIR="${MINERVA_HOME}/data/premade_mil/minimum_10"
-BASE_OUTPUT_DIR="${MINERVA_HOME}/models/finetune_shuffle"
+MODEL_DIR="/home/adeluci2/data-mdredze1/adeluci2/models"
+BASE_OUTPUT_DIR="${MODEL_DIR}/finetune_shuffle"
 OUTPUT_DIR="${BASE_OUTPUT_DIR}/ratio_${k}"
 LOG_DIR="${OUTPUT_DIR}/logs"
 mkdir -p "${LOG_DIR}"
 export WANDB_PROJECT="Minerva"
-export WANDB_RUN_GROUP="MIL-Min10"
+export WANDB_RUN_GROUP="MIL-Min10-v2"
 
 # Parameter settings
 EPOCHS=50
@@ -39,15 +40,18 @@ TRAIN_BATCH=5
 ACC_STEPS=1
 EVAL_BATCH=10
 BAG_SIZE=100
-
+PATIENCE=20
+WARMUP=100
 # Start training
 echo "Training model with key instance ratio ${k}. Saving to ${OUTPUT_DIR}"
 # srun python -m torch.distributed.launch --nproc_per_node 4 "${MINERVA_HOME}/code/train_mil.py" \
 torchrun --nproc_per_node 4 "${MINERVA_HOME}/code/train_mil.py" \
   --dataset_dir "${DATA_DIR}" \
-  --instance_model "${MINERVA_HOME}/models/minerva_instance_models/hp_best" \
+  --instance_model "${MODEL_DIR}/minerva_instance_models/hp_best" \
   --sample_instances True \
-  --patience 5 \
+  --patience "${PATIENCE}" \
+  --save_total_limit 3 \
+  --warmup_steps "${WARMUP}" \
   --finetune_instance_model True \
   --run_name "finetune-${k}" \
   --key_instance_ratio "${k}" \
