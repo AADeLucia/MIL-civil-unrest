@@ -5,13 +5,14 @@
 export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=1
 export WANDB_PROJECT="Minerva"
-export WANDB_RUN_GROUP="Test"
+export WANDB_RUN_GROUP="Test-Min10"
 
 # torchrun isn't working
 # python -m torch.distributed.launch
 # --sharded_ddp zero_dp_3 works for training but not inference
 # -m torch.distributed.launch --nproc_per_node 2
 # save+eval 1000, 10 epochs, 8 accumulation steps
+DATA_DIR="${MINERVA_HOME}/data/premade_mil/minimum_10"
 LOG_STEP=100
 RATIOS=( 1.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 0.0 )
 # Original was 1e-5
@@ -25,7 +26,8 @@ do
   echo "Training model with key instance ratio ${k}. Saving to ${OUTPUT_DIR}"
 
   python "${MINERVA_HOME}/code/train_mil.py" \
-    --dataset_dir "${MINERVA_HOME}/data/premade_mil_test" \
+    --instance_model "${MINERVA_HOME}/models/minerva_instance_models" \
+    --dataset_dir "${DATA_DIR}" \
     --sample_instances False \
     --finetune_instance_model False \
     --run_name "test-${k}" \

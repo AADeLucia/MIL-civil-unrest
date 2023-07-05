@@ -39,7 +39,8 @@ class MILTwitterDataset(torch.utils.data.Dataset):
                  tokenizer,
                  samples_per_bag=10,
                  sample_instances=False,
-                 random_seed=None
+                 random_seed=None,
+                 instance_score_field="instance_score"
                  ):
         super().__init__()
         # Load data
@@ -50,6 +51,7 @@ class MILTwitterDataset(torch.utils.data.Dataset):
         self.sampler = random.Random(random_seed)
         self.tokenizer = tokenizer
         self.pad = -100
+        self.instance_score_field = instance_score_field
 
     def __getitem__(self, index):
         # Retrieve bag at index
@@ -104,7 +106,7 @@ class MILTwitterDataset(torch.utils.data.Dataset):
             ids = torch.ones((1, max_instances)) * self.pad
 
             for j, t in enumerate(temp["instances"]):
-                scores[0][j] = t["civil_unrest_score"]
+                scores[0][j] = t[self.instance_score_field]
                 text[j] = t["tweet_text"]
                 mask[0][j] = 1
                 ids[0][j] = torch.tensor(t["id_str"], dtype=torch.long)

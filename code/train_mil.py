@@ -116,6 +116,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(train_args.instance_model)
 
     # Set up dataset
+    logger.info(f"Setting up datasets")
     train_dataset = MILTwitterDataset(
         f"{train_args.dataset_dir}/train.jsonl",
         tokenizer,
