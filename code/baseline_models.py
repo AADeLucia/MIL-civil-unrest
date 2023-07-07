@@ -3,14 +3,10 @@ models.py script from https://github.com/JHU-CLSP/civil-unrest-case-study
 Contains the Ngram and random baselines from "Study of Manifestation of Civil Unrest on Twitter" W-NUT @ EMNLP 2021
 
 Modified for this work.
-
 """
-# Standard imports
 import logging
 import pickle
 import sys
-
-# Third-party imports
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import sklearn.ensemble 
@@ -19,6 +15,7 @@ from sklearn import svm
 from sklearn.base import BaseEstimator
 import numpy as np
 import torch
+from sklearn.ensemble import RandomForestClassifier
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

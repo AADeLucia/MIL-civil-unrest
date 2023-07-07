@@ -18,7 +18,8 @@ import json
 from baseline_models import RandomThresholdClassifier, CountryThresholdClassifier, MIL_I
 from argparse import ArgumentParser
 from mil_dataset import MILTwitterDataset
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, AutoModel
+import torch
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -129,6 +130,29 @@ def run_mil_i_baseline(train, val, test, output_dir):
         eval_model(clf, val, test, f"{output_dir}/MIL-I-{k:.1}_results.json")
 
 
+def get_bag_features(model_path, data):
+    # Set CPU/GPU device
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    model = AutoModel.from_pretrained(model_path).eval().to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+    new_data = []
+    with torch.inference_mode():
+        for row in tqdm(data.itertuples(index=False), ncols=0):
+            batch = tokenizer(row.TEXT, return_tensors="pt", truncation="longest").to(device)
+            outputs = model(**batch)
+            import pdb;pdb.set_trace()
+
+
+def run_mil_avg_baseline(train, val, test, output_dir):
+    logger.info(f"Running MIL-AVG model")
+    logger.info(f"Getting features")
+    model_path = f"{os.environ['MINERVA_HOME']}/models/minerva_instance_models"
+
+    train = get_bag_features(model_path, train)
+    return
+
+
 ########
 # Main
 ########
@@ -137,22 +161,8 @@ def parse_args():
     parser.add_argument("--dataset-dir", type=str, required=True)
     parser.add_argument("--output-dir", help="Folder to save results", required=True)
     parser.add_argument("--instance-threshold", type=float, default=0)
-    parser.add_argument("--save-df", action="store_true",
-                        help="Saves DataFrame in pickle format. Saves a DataFrame for each task labeling and a '.save' for easy loading")
-    parser.add_argument("--from-save", action="store_true",
-                        help="Whether to use the aggregated daily DF from a previous run. If True, it checks if "
-                             "{output_dir}/{'weekly' if agg_weekly else 'daily'}_{lead_time}_{positive_day_threshold}_df.pkl.save exists."
-                             "If this file doesn't exist then no file is used.")
-    parser.add_argument("--use-existing-model", action="store_true",
-                        help="If model file exists, use that model instead of overwriting")
-    parser.add_argument("--n-iter", type=int, default=1,
-                        help="Number of repeated model train / test iterations for each task")
     parser.add_argument("--n-jobs", type=int, default=1, help="Number of processes for models")
-    parser.add_argument("--models", nargs="*", default=["random", "rf", "lr"],
-                        choices=["rf", "lr", "random", "country-random", "svm"],
-                        help="Model for event forecasting/detection. `rf` for random forest and `lr` for logistic regression")
-    parser.add_argument("--run-cv-train", action="store_true", help="Run cross-validation")
-    parser.add_argument("--random-seed", type=int, default=42)
+    # parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 
@@ -165,8 +175,10 @@ def main():
     logger.info(f"Preparing data from {args.dataset_dir}")
     train, val, test = prepare_data(args.dataset_dir, args.instance_threshold)
 
-    run_mil_i_baseline(train, val, test, args.output_dir)
+    run_mil_avg_baseline(train, val, test, args.output_dir)
     return
+
+    run_mil_i_baseline(train, val, test, args.output_dir)
 
     # Random baselines
     run_random_baselines(train, val, test, args.output_dir)
