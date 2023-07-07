@@ -5,7 +5,6 @@ Code: https://github.com/JHU-CLSP/civil-unrest-case-study
 """
 import sys
 import os
-sys.path.append(f"{os.environ['MINERVA_HOME']}/code/civil-unrest-case-study/code")
 import logging
 from tqdm import tqdm
 from sklearn.pipeline import Pipeline
@@ -16,8 +15,7 @@ from sklearn.ensemble import RandomForestClassifier
 import pandas as pd
 import numpy as np
 import json
-from models import MyCV, RandomThresholdClassifier, CountryThresholdClassifier
-from models import LogisticRegressionClassifier
+from baseline_models import RandomThresholdClassifier, CountryThresholdClassifier, MIL_I
 from argparse import ArgumentParser
 from mil_dataset import MILTwitterDataset
 from transformers import AutoTokenizer
@@ -42,12 +40,20 @@ def prepare_data(dataset_dir, instance_threshold):
         )
         for bag in tqdm(split_data, ncols=0, desc=split):
             # Need the following fields: ID, COUNTRY, TEXT
-            text = [i['tweet_text'] for i in bag['instances'] if i['instance_score']>=instance_threshold]
+            text, scores = [], []
+            for i in bag['instances']:
+                # Check if tweet meets score threshold
+                if i["instance_score"] < instance_threshold:
+                    continue
+                text.append(i['tweet_text'])
+                scores.append(i["instance_score"])
             sample = {
                 "ID": bag["bag_id"],
                 "label": bag['label'],
                 "COUNTRY": bag["bag_id"].split("_")[-1],
-                "TEXT": text
+                "TEXT": text,
+                "SCORES": scores,
+                "NUM_INSTANCES": bag["num_instances"]
             }
             samples.append(sample)
         datasets.append(
@@ -115,6 +121,14 @@ def run_ngram_baseline(train, val, test, output_dir):
     eval_model(pipe, val, test, f"{output_dir}/ngram_results.json")
 
 
+def run_mil_i_baseline(train, val, test, output_dir):
+    logger.info(f"Running MIL-I model")
+    for k in np.arange(0.0, 1.0, step=0.1):
+        clf = MIL_I(k)
+        clf.fit(train, train['label'])
+        eval_model(clf, val, test, f"{output_dir}/MIL-I-{k:.1}_results.json")
+
+
 ########
 # Main
 ########
@@ -150,6 +164,9 @@ def main():
 
     logger.info(f"Preparing data from {args.dataset_dir}")
     train, val, test = prepare_data(args.dataset_dir, args.instance_threshold)
+
+    run_mil_i_baseline(train, val, test, args.output_dir)
+    return
 
     # Random baselines
     run_random_baselines(train, val, test, args.output_dir)
