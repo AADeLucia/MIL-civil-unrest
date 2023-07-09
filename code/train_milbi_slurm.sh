@@ -19,7 +19,7 @@ conda activate minerva-proj
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 # Choose parameter for this task
-k=0.6
+k=0.4
 BETA=( 1.0 0.25 0.5 0.75 )
 b=${BETA[${SLURM_ARRAY_TASK_ID}]}
 LOG_STEP=100

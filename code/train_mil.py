@@ -59,9 +59,10 @@ class MILTrainingArguments(TrainingArguments):
     instance_level_loss: float = field(
         default=0.0
     )
-    positive_class_weight: float = field(
-        default=1.0
-    )
+    # Removing because not implemented
+    # positive_class_weight: float = field(
+    #     default=1.0
+    # )
     patience: int = field(
         default=-1
     )
@@ -98,24 +99,22 @@ def main():
 
     # Set up model
     # Make sure there is a checkpoint if --resume_from_checkpoint
+    model_params = dict(
+        instance_model_path=train_args.instance_model,
+        key_instance_ratio=train_args.key_instance_ratio,
+        finetune_instance_model=train_args.finetune_instance_model,
+        instance_level_loss=train_args.instance_level_loss
+    )
     if train_args.resume_from_checkpoint:
         if not os.path.exists(f"{train_args.output_dir}/trainer_state.json"):
             train_args.resume_from_checkpoint = False
             logger.warning(f"Checkpoint not found at {train_args.output_dir}. Not resuming from checkpoint.")
-            model = MILModel(
-                instance_model_path=train_args.instance_model,
-                key_instance_ratio=train_args.key_instance_ratio,
-                finetune_instance_model=train_args.finetune_instance_model
-            )
+            model = MILModel(**model_params)
         else:
             logger.info(f"Resuming from checkpoint {train_args.output_dir}")
             model = MILModel().from_pretrained(train_args.output_dir)
     else:
-        model = MILModel(
-            instance_model_path=train_args.instance_model,
-            key_instance_ratio=train_args.key_instance_ratio,
-            finetune_instance_model=train_args.finetune_instance_model
-        )
+        model = MILModel(**model_params)
     tokenizer = AutoTokenizer.from_pretrained(train_args.instance_model)
 
     # Set up dataset

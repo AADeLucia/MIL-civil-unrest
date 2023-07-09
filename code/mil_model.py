@@ -42,10 +42,18 @@ class InstanceModel(torch.nn.Module):
         # Reshape to [# bags, # instances]
         if reshape:
             output = output.view(reshape)
-        output = torch.sigmoid(output)
+        output = torch.sigmoid(output)  # Probabilities
         return output
 
     def calculate_loss(self, y_hat, y):
+        """BCE loss"""
+        # y contains -100 as a padding value. Ignore during loss calculation.
+        loss = torch.nn.functional.binary_cross_entropy(y_hat, y, reduction="none")
+        loss_mask = y != -100
+        loss_masked = loss.where(loss_mask, torch.tensor(0.0, device=y.device))
+        return loss_masked.sum() / loss_mask.sum()
+
+    def calculate_loss_mse(self, y_hat, y):
         """Unreduced MSE"""
         return torch.nn.functional.mse_loss(y_hat, y, reduction="none")
 
@@ -183,13 +191,9 @@ class MILModel(torch.nn.Module):
         if y is not None:
             loss = self.bag_model.calculate_loss(bag_probs, y)
         # 2. Instance-level loss (Binary cross-entropy)
-        # Use instance_scores as ground truth. Want to minimize gap.
-        # mean squared error = (error per instance) / (# of instances)
-        # Scale instance loss by amount of effect we want
+        # Scale instance loss by amount of impact we want
         if y_instance is not None:
             instance_loss = self.instance_model.calculate_loss(instance_probs, y_instance)
-            num_key_instances = self.bag_model.calc_num_key_instances(bag_mask)
-            instance_loss = (instance_loss * bag_mask).sum() / num_key_instances.sum()
             loss = loss + (instance_loss * self.instance_level_loss)
         return loss
 
