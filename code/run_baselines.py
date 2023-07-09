@@ -124,7 +124,7 @@ def run_ngram_baseline(train, val, test, output_dir):
 
 def run_mil_i_baseline(train, val, test, output_dir):
     logger.info(f"Running MIL-I model")
-    for k in np.arange(0.0, 1.0, step=0.1):
+    for k in np.arange(0.0, 1.1, step=0.1):
         clf = MIL_I(k)
         clf.fit(train, train['label'])
         eval_model(clf, val, test, f"{output_dir}/MIL-I-{k:.1}_results.json")
@@ -136,12 +136,17 @@ def get_bag_features(model_path, data):
     model = AutoModel.from_pretrained(model_path).eval().to(device)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-    new_data = []
+    features = []
     with torch.inference_mode():
-        for row in tqdm(data.itertuples(index=False), ncols=0):
-            batch = tokenizer(row.TEXT, return_tensors="pt", truncation="longest").to(device)
+        for row in tqdm(data.itertuples(index=False), ncols=0, total=len(data)):
+            batch = tokenizer(row.TEXT, return_tensors="pt", truncation="longest_first", padding=True).to(device)
             outputs = model(**batch)
-            import pdb;pdb.set_trace()
+
+            # Average for day
+            # Use pooled output (CLS token for BERT)
+            features.append(torch.mean(outputs.pooler_output, axis=0).cpu().numpy())
+    data["features"] = features
+    return data
 
 
 def run_mil_avg_baseline(train, val, test, output_dir):
@@ -150,7 +155,16 @@ def run_mil_avg_baseline(train, val, test, output_dir):
     model_path = f"{os.environ['MINERVA_HOME']}/models/minerva_instance_models"
 
     train = get_bag_features(model_path, train)
-    return
+    val = get_bag_features(model_path, val)
+    test = get_bag_features(model_path, test)
+
+    # Model. Settings are from the models.py code
+    pipe = Pipeline([
+        ("transform", FunctionTransformer(lambda x: np.stack(x['features'].values))),
+        ("clf", RandomForestClassifier(n_estimators=10, max_depth=32, min_samples_split=32, class_weight='balanced'))
+    ])
+    pipe.fit(train, train.label)
+    eval_model(pipe, val, test, f"{output_dir}/MIL-AVG_results.json")
 
 
 ########
@@ -175,16 +189,16 @@ def main():
     logger.info(f"Preparing data from {args.dataset_dir}")
     train, val, test = prepare_data(args.dataset_dir, args.instance_threshold)
 
-    run_mil_avg_baseline(train, val, test, args.output_dir)
-    return
+    # Not optimized, takes ~7 hours
+    # run_mil_avg_baseline(train, val, test, args.output_dir)
 
     run_mil_i_baseline(train, val, test, args.output_dir)
 
     # Random baselines
-    run_random_baselines(train, val, test, args.output_dir)
+    # run_random_baselines(train, val, test, args.output_dir)
 
     # Ngram baseline
-    run_ngram_baseline(train, val, test, args.output_dir)
+    # run_ngram_baseline(train, val, test, args.output_dir)
 
 
 if __name__ == "__main__":
