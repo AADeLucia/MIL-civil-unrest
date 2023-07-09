@@ -149,8 +149,8 @@ def get_bag_features(model_path, data):
     return data
 
 
-def run_mil_avg_baseline(train, val, test, output_dir):
-    logger.info(f"Running MIL-AVG model")
+def run_avg_bag_baseline(train, val, test, output_dir):
+    logger.info(f"Running AVG bag model")
     logger.info(f"Getting features")
     model_path = f"{os.environ['MINERVA_HOME']}/models/minerva_instance_models"
 
@@ -164,7 +164,25 @@ def run_mil_avg_baseline(train, val, test, output_dir):
         ("clf", RandomForestClassifier(n_estimators=10, max_depth=32, min_samples_split=32, class_weight='balanced'))
     ])
     pipe.fit(train, train.label)
-    eval_model(pipe, val, test, f"{output_dir}/MIL-AVG_results.json")
+    eval_model(pipe, val, test, f"{output_dir}/avg-bag_results.json")
+
+
+def run_avg_bag_bertweet_baseline(train, val, test, output_dir):
+    logger.info(f"Running AVG Bag BERTweet model")
+    logger.info(f"Getting features")
+    model_path = f"vinai/bertweet-base"
+
+    train = get_bag_features(model_path, train)
+    val = get_bag_features(model_path, val)
+    test = get_bag_features(model_path, test)
+
+    # Model. Settings are from the models.py code
+    pipe = Pipeline([
+        ("transform", FunctionTransformer(lambda x: np.stack(x['features'].values))),
+        ("clf", RandomForestClassifier(n_estimators=10, max_depth=32, min_samples_split=32, class_weight='balanced'))
+    ])
+    pipe.fit(train, train.label)
+    eval_model(pipe, val, test, f"{output_dir}/avg-bag-bertweet_results.json")
 
 
 ########
@@ -190,9 +208,10 @@ def main():
     train, val, test = prepare_data(args.dataset_dir, args.instance_threshold)
 
     # Not optimized, takes ~7 hours
+    run_avg_bag_bertweet_baseline(train, val, test, args.output_dir)
     # run_mil_avg_baseline(train, val, test, args.output_dir)
 
-    run_mil_i_baseline(train, val, test, args.output_dir)
+    # run_mil_i_baseline(train, val, test, args.output_dir)
 
     # Random baselines
     # run_random_baselines(train, val, test, args.output_dir)
